@@ -35,6 +35,7 @@ public class RNAudioRecordModule extends ReactContextBaseJavaModule {
     private String tmpFile;
     private String outFile;
     private Promise stopRecordingPromise;
+    private boolean isPaused;
 
 
     public RNAudioRecordModule(ReactApplicationContext reactContext) {
@@ -50,6 +51,8 @@ public class RNAudioRecordModule extends ReactContextBaseJavaModule {
     @ReactMethod
     public void init(ReadableMap options) {
         sampleRateInHz = 44100;
+        isPaused = false;
+
         if (options.hasKey("sampleRate")) {
             sampleRateInHz = options.getInt("sampleRate");
         }
@@ -92,6 +95,8 @@ public class RNAudioRecordModule extends ReactContextBaseJavaModule {
     @ReactMethod
     public void start() {
         isRecording = true;
+        isPaused = false;
+
         recorder.startRecording();
         Log.d(TAG, "started recording");
 
@@ -107,6 +112,9 @@ public class RNAudioRecordModule extends ReactContextBaseJavaModule {
                     while (isRecording) {
                         bytesRead = recorder.read(buffer, 0, buffer.length);
 
+                        if(isPaused) 
+                            continue;
+
                         // skip first 2 buffers to eliminate "click sound"
                         if (bytesRead > 0 && ++count > 2) {
                             base64Data = Base64.encodeToString(buffer, Base64.NO_WRAP);
@@ -115,6 +123,7 @@ public class RNAudioRecordModule extends ReactContextBaseJavaModule {
                         }
                     }
 
+                    isPaused = false;
                     recorder.stop();
                     os.close();
                     saveAsWav();
@@ -131,8 +140,15 @@ public class RNAudioRecordModule extends ReactContextBaseJavaModule {
     @ReactMethod
     public void stop(Promise promise) {
         isRecording = false;
+        isPaused = false;
         stopRecordingPromise = promise;
     }
+
+    @ReactMethod
+    public void pause(boolean paused) {
+        isPaused = paused;
+    }
+
 
     private void saveAsWav() {
         try {
