@@ -12,7 +12,13 @@ import com.facebook.react.bridge.ReactContextBaseJavaModule;
 import com.facebook.react.bridge.ReactMethod;
 import com.facebook.react.bridge.ReadableMap;
 import com.facebook.react.modules.core.DeviceEventManagerModule;
-
+import android.media.AudioManager;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothHeadset;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -37,6 +43,9 @@ public class RNAudioRecordModule extends ReactContextBaseJavaModule {
     private Promise stopRecordingPromise;
     private boolean isPaused;
 
+    boolean isBTConnected = false;
+
+    AudioManager audioManager;
 
     public RNAudioRecordModule(ReactApplicationContext reactContext) {
         super(reactContext);
@@ -48,10 +57,42 @@ public class RNAudioRecordModule extends ReactContextBaseJavaModule {
         return "RNAudioRecord";
     }
 
+
+    // Broadcast receiver - not used for now
+    private BroadcastReceiver mBluetoothScoReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            int state = intent.getIntExtra(AudioManager.EXTRA_SCO_AUDIO_STATE, -1);
+            Log.d(TAG, "Aidac init recording state = " + state);
+            if (AudioManager.SCO_AUDIO_STATE_CONNECTED == state) {
+                Log.d(TAG, "Aidac got state connected...");
+                isBTConnected = true;
+                /*
+                 * Now the connection has been established to the bluetooth device.
+                 * Record audio or whatever (on another thread).With AudioRecord you can record with an object created like this:
+                 * new AudioRecord(MediaRecorder.AudioSource.MIC, 8000, AudioFormat.CHANNEL_CONFIGURATION_MONO,
+                 * AudioFormat.ENCODING_PCM_16BIT, audioBufferSize);
+                 *
+                 * After finishing, don't forget to unregister this receiver and
+                 * to stop the bluetooth connection with am.stopBluetoothSco();
+                 */
+            }
+        }
+    };
+
+
+    public static boolean isBluetoothHeadsetConnected() {
+        BluetoothAdapter mBluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
+        return mBluetoothAdapter != null && mBluetoothAdapter.isEnabled()
+                && mBluetoothAdapter.getProfileConnectionState(BluetoothHeadset.HEADSET) == BluetoothHeadset.STATE_CONNECTED;
+    } 
+
     @ReactMethod
     public void init(ReadableMap options) {
         sampleRateInHz = 44100;
         isPaused = false;
+
+        Log.d(TAG, "Aidac audio - init recording");
 
         if (options.hasKey("sampleRate")) {
             sampleRateInHz = options.getInt("sampleRate");
@@ -88,8 +129,6 @@ public class RNAudioRecordModule extends ReactContextBaseJavaModule {
         eventEmitter = reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class);
 
         bufferSize = AudioRecord.getMinBufferSize(sampleRateInHz, channelConfig, audioFormat);
-        int recordingBufferSize = bufferSize * 3;
-        recorder = new AudioRecord(audioSource, sampleRateInHz, channelConfig, audioFormat, recordingBufferSize);
     }
 
     @ReactMethod
@@ -97,8 +136,32 @@ public class RNAudioRecordModule extends ReactContextBaseJavaModule {
         isRecording = true;
         isPaused = false;
 
+        if(isBluetoothHeadsetConnected()) {
+            Log.d(TAG, "Aidac BT device is connected...");
+            isBTConnected = true;
+        } else {
+            Log.d(TAG, "Aidac BT device is NOT connected...");
+            isBTConnected = false;
+        }
+
+/*        IntentFilter intentFilter = new IntentFilter(AudioManager.ACTION_SCO_AUDIO_STATE_UPDATED);
+        reactContext.registerReceiver(mBluetoothScoReceiver, intentFilter);
+*/
+        if(isBTConnected) {
+            audioManager = (AudioManager) reactContext.getApplicationContext().getSystemService(reactContext.getApplicationContext().AUDIO_SERVICE);
+
+            // Start Bluetooth SCO.
+            audioManager.setMode(audioManager.MODE_NORMAL);
+            audioManager.setBluetoothScoOn(true);
+            audioManager.startBluetoothSco();
+        }
+
+
+        int recordingBufferSize = bufferSize * 3;
+        recorder = new AudioRecord(audioSource, sampleRateInHz, channelConfig, audioFormat, recordingBufferSize);
+
         recorder.startRecording();
-        Log.d(TAG, "started recording");
+        Log.d(TAG, "Aidac started recording");
 
         Thread recordingThread = new Thread(new Runnable() {
             public void run() {
@@ -142,6 +205,14 @@ public class RNAudioRecordModule extends ReactContextBaseJavaModule {
         isRecording = false;
         isPaused = false;
         stopRecordingPromise = promise;
+
+        //reactContext.unregisterReceiver(mBluetoothScoReceiver);
+        if(isBTConnected) {
+            // Stop Bluetooth SCO.
+            audioManager.stopBluetoothSco();
+            audioManager.setMode(audioManager.MODE_NORMAL);
+            audioManager.setBluetoothScoOn(false);
+        }
     }
 
     @ReactMethod
